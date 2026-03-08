@@ -1,0 +1,15 @@
+<!doctype html>
+<title>Players</title>
+<h1>Players</h1>
+<a href="{{ url_for('new_player') }}">New player</a>
+<ul>
+  {% for p in players %}
+    <li>
+      {{ p.id }} – {{ p.name }} (Lv {{ p.level }}, score {{ p.score }})
+      [<a href="{{ url_for('edit_player', pid=p.id) }}">edit</a>]
+      <form action="{{ url_for('remove_player', pid=p.id) }}" method="post" style="display:inline">
+        <button>delete</button>
+      </form>
+    </li>
+  {% endfor %}
+</ul>
