@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: python-crud-game
+spec:
+  replicas: 6
+  selector:
+    matchLabels:
+      app: python-crud-game
+  template:
+    metadata:
+      labels:
+        app: python-crud-game
+    spec:
+      containers:
+      - name: python-crud-game
+        image: ajayab05/python-crud-game:latest
+        ports:
+        - containerPort: 5000
