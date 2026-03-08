@@ -1,50 +1,65 @@
-name: Docker CI/CD Pipeline
+name: DevSecOps CI Pipeline
 
 on:
   push:
-    branches:
-      - main
+    branches: ["main"]
   pull_request:
-    branches:
-      - main
-
-env:
-  IMAGE_NAME: python-crud-game
+    branches: ["main"]
 
 jobs:
-
-  build-and-push:
-
+  security-scan:
     runs-on: ubuntu-latest
 
     steps:
 
-    - name: Checkout Source Code
+    - name: Checkout Code
       uses: actions/checkout@v4
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+    # SonarQube Scan
+    - name: SonarQube Scan
+      uses: sonarsource/sonarqube-scan-action@v2
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
-    - name: Login to DockerHub
-      uses: docker/login-action@v3
+    # Fortify SAST
+    - name: Fortify Scan
+      uses: fortify/gha-setup-fortify-scancentral-client@v1
+
+    # BlackDuck Scan
+    - name: BlackDuck Scan
+      uses: synopsys-sig/synopsys-action@v1
       with:
-        username: ${{ secrets.DOCKER_USERNAME }}
-        password: ${{ secrets.DOCKER_PASSWORD }}
+        blackduck_url: ${{ secrets.BLACKDUCK_URL }}
+        blackduck_token: ${{ secrets.BLACKDUCK_TOKEN }}
 
-    - name: Extract Git Commit SHA
-      id: vars
-      run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+    # OWASP Dependency Check
+    - name: OWASP Dependency Check
+      uses: dependency-check/Dependency-Check_Action@main
+      with:
+        project: "python-crud-game"
+        path: "."
+        format: "HTML"
+
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: security-scan
+
+    steps:
+
+    - name: Checkout Code
+      uses: actions/checkout@v4
 
     - name: Build Docker Image
-      run: |
-        docker build -t ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.sha_short }} .
+      run: docker build -t python-crud-game:${{ github.sha }} .
 
-    - name: Tag Latest Image
-      run: |
-        docker tag ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.sha_short }} \
-        ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest
-
-    - name: Push Image to DockerHub
-      run: |
-        docker push ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.sha_short }}
-        docker push ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+    # Trivy Container Scan
+    - name: Trivy Image Scan
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: python-crud-game:${{ github.sha }}
+        format: table
+        exit-code: 1
+        ignore-unfixed: true
+        vuln-type: 'os,library'
+        severity: 'CRITICAL,HIGH'
