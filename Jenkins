@@ -1,0 +1,152 @@
+pipeline {
+    agent any
+
+    environment {
+        DOCKER_IMAGE = "ajayab05/python-crud-game"
+        DOCKER_TAG = "latest"
+        DOCKERHUB_CREDENTIALS = "dockerhub-creds"
+        SCANNER_HOME = tool 'sonar-scanner'
+        AWS_REGION = "ap-south-1"
+        EKS_CLUSTER = "education-eks-kid7IiN1"
+    }
+
+    stages {
+
+        stage('Clean Workspace') {
+            steps {
+                cleanWs()
+            }
+        }
+
+        stage('Checkout Code') {
+            steps {
+                git branch: 'main', url: 'https://github.com/Ajayab05/python-crud-game.git'
+            }
+        }
+
+        stage('Verify Files') {
+            steps {
+                sh 'ls -la'
+            }
+        }
+
+        stage('SonarQube Scan') {
+            steps {
+                withSonarQubeEnv('sonarqube') {
+                    sh '''
+                    $SCANNER_HOME/bin/sonar-scanner \
+                    -Dsonar.projectName=python-crud-game \
+                    -Dsonar.projectKey=python-crud-game \
+                    -Dsonar.sources=. \
+                    -Dsonar.python.version=3
+                    '''
+                }
+            }
+        }
+
+        stage('Trivy Filesystem Scan') {
+            steps {
+                sh 'trivy fs . > trivy-fs-report.txt'
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                sh 'docker build -t $DOCKER_IMAGE:$DOCKER_TAG .'
+            }
+        }
+
+        stage('Trivy Image Scan') {
+            steps {
+                sh 'trivy image $DOCKER_IMAGE:$DOCKER_TAG > trivy-image-report.txt'
+            }
+        }
+
+        stage('Verify Docker Image') {
+            steps {
+                sh 'docker images'
+            }
+        }
+
+        stage('Push to DockerHub') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: "$DOCKERHUB_CREDENTIALS",
+                    usernameVariable: 'DOCKER_USER',
+                    passwordVariable: 'DOCKER_PASS'
+                )]) {
+                    sh '''
+                    echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
+                    docker push $DOCKER_IMAGE:$DOCKER_TAG
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy to EKS using Helm') {
+            steps {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-key'
+                ]]) {
+                    sh '''
+                    aws eks update-kubeconfig --region $AWS_REGION --name $EKS_CLUSTER
+
+                    helm upgrade --install python-app ./helm/python-crud-game \
+                    --set image.repository=$DOCKER_IMAGE \
+                    --set image.tag=$DOCKER_TAG
+                    '''
+                }
+            }
+        }
+        stage('Verify Deployment') {
+    steps {
+        withCredentials([[ 
+            $class: 'AmazonWebServicesCredentialsBinding',
+            credentialsId: 'aws-key'
+        ]]) {
+
+            sh '''
+            aws eks update-kubeconfig --region $AWS_REGION --name $EKS_CLUSTER
+
+            echo "Checking deployment status..."
+
+            if ! kubectl rollout status deployment/python-crud-game --timeout=120s; then
+                echo "Deployment failed! Rolling back..."
+
+                helm rollback python-app
+
+                echo "Rollback completed"
+                exit 1
+            fi
+
+            kubectl get pods
+            kubectl get svc
+            '''
+        }
+    }
+}
+
+        stage('Cleanup Docker Images') {
+            steps {
+                sh 'docker system prune -f'
+            }
+        }
+    }
+
+    post {
+
+        always {
+            archiveArtifacts artifacts: '*.txt', fingerprint: true
+        }
+
+        success {
+            echo 'Pipeline executed successfully and deployed to EKS!'
+        }
+
+        failure {
+            echo 'Pipeline failed!'
+        }
+    }
+}
+
